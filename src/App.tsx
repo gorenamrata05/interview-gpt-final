@@ -69,8 +69,6 @@ let tempTranscript = '';
   setIsListening(false);
   if (tempTranscript.trim().length > 0) {
     getFeedback();
-  } else {
-    // alert("No answer detected. Please try again.");
   }
 };
 
