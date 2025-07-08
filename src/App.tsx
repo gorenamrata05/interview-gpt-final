@@ -25,15 +25,18 @@ declare global {
     };
   }
 }
+
 const openai = new OpenAI({
   apiKey: import.meta.env.VITE_OPENAI_API_KEY,
   dangerouslyAllowBrowser: true,
 });
+
 interface Feedback {
   feedback: string;
   correctness: number;
   completeness: number;
 }
+
 function App() {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -42,35 +45,37 @@ function App() {
   const [question, setQuestion] = useState('');
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const recognitionRef = useRef<CustomSpeechRecognition | null>(null);
+  const transcriptRef = useRef('');
 
   useEffect(() => {
-
-   
-
     getQuestion();
-let tempTranscript = '';
 
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const recognition = new SpeechRecognition() as CustomSpeechRecognition;
-    (recognition as any).continuous = false;
-    (recognition as any).interimResults = false;
-    (recognition as any).lang = 'en-US';
-    (recognition as any).start();
-    (recognition as any).onresult = (e: any) => {
-      const tempTranscript = e.results[e.resultIndex][0].transcript;
-      setTranscript(tempTranscript);
-    };
- if (!SpeechRecognition) {
+    if (!SpeechRecognition) {
       console.error('Speech recognition not supported in this browser.');
       return;
     }
-  (recognition as any).onend = () => {
-  setIsListening(false);
-  if (tempTranscript.trim().length > 0) {
-    getFeedback();
-  }
-};
+
+    const recognition = new SpeechRecognition() as CustomSpeechRecognition;
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (e: any) => {
+       const result = e.results[e.resultIndex][0].transcript;
+        transcriptRef.current = result;
+        setTranscript(result);  
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      if (transcript.trim()) {
+        getFeedback(transcriptRef.current);
+      } else {
+        console.warn('No transcript available.');
+      }
+    };
 
     recognitionRef.current = recognition;
   }, []);
@@ -102,18 +107,29 @@ let tempTranscript = '';
   };
 
   function extractJSON(text: any) {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (match) {
-    try {
-      return JSON.parse(match[0]);
-    } catch (e) {
-      console.error("Invalid JSON:", e);
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch (e) {
+        console.error('Invalid JSON:', e);
+      }
     }
+    return null;
   }
-  return null;
-}
 
-  const getFeedback = async () => {
+  const getFeedback = async (answerText: string) => {
+
+    if (!answerText.trim()) {
+      console.warn('Empty transcript. Skipping feedback.');
+      return;
+    }
+
+    if (!transcript.trim()) {
+      console.warn('Empty transcript. Skipping feedback.');
+      return;
+    }
+
     setFeedbackLoadingStatus(true);
     try {
       const completion = await openai.chat.completions.create({
@@ -138,13 +154,11 @@ let tempTranscript = '';
         ],
       });
       const responseText: any = completion.choices[0]?.message?.content;
-      if (responseText) {
-        const parsed = extractJSON(responseText);
-        if (parsed) {
-          setFeedback(parsed);
-        } else {
-          console.warn("Could not parse JSON from GPT response:", responseText);
-        }
+      const parsed = extractJSON(responseText);
+      if (parsed) {
+        setFeedback(parsed);
+      } else {
+        console.warn('Could not parse JSON from GPT response:', responseText);
       }
     } catch (error) {
       console.error('Error fetching feedback:', error);
@@ -163,7 +177,11 @@ let tempTranscript = '';
   const handleStopListening = async () => {
     setIsListening(false);
     recognitionRef.current?.stop();
-    await getFeedback();
+  if (transcriptRef.current.trim()) {
+    getFeedback(transcriptRef.current);
+  } else {
+    alert('No answer detected.');
+  }
   };
 
   const handleReattempt = () => {
@@ -172,22 +190,25 @@ let tempTranscript = '';
     handleStartListening();
   };
 
+  useEffect(() => {
+  if (!isListening && transcript.trim()) {
+    getFeedback(transcriptRef.current);
+  }
+}, [isListening, transcript]);
+
   return (
     <div className="w-full h-screen overflow-hidden">
       <div className={`max-w-4xl mx-auto ${feedbackLoadingStatus || feedback ? 'flex' : ''}`}>
-        <div
-          className={`${
-            feedbackLoadingStatus || feedback ? 'w-1/2 h-screen' : 'max-w-xl text-center'
-          }`}
-        >
-          <p className="text-[24px] font-semibold mt-24 mr-2  {feedback.feedback ? 'border-r' : ''}">
+        <div className={`${feedbackLoadingStatus || feedback ? 'w-1/2 h-screen' : 'max-w-xl text-center'}`}>
+          <p className="text-[24px] font-semibold mt-24 mr-2">
             {questionStatus ? 'Loading question...' : question}
           </p>
           <p className="mt-10">Record your answer</p>
           <p className="text-sm text-neutral-700 mb-5">Try to answer</p>
           <span
             className={`${
-              isListening ? 'bg-black text-white' : 'bg-blue-500 text-white' } p-3 cursor-pointer ${feedback ? 'hidden' : ''} `}
+              isListening ? 'bg-black text-white' : 'bg-blue-500 text-white'
+            } p-3 cursor-pointer ${feedback ? 'hidden' : ''}`}
             onClick={isListening ? handleStopListening : handleStartListening}
           >
             {isListening ? 'Submit Answer' : 'Start Answering'}
@@ -195,25 +216,33 @@ let tempTranscript = '';
 
           {feedback && (
             <span
-              onClick={handleReattempt} className="bg-black text-white cursor-pointer py-2 px-5 rounded-full ml-2"
+              onClick={handleReattempt}
+              className="bg-black text-white cursor-pointer py-2 px-5 rounded-full ml-2"
             >
               Reattempt question
             </span>
           )}
-            <span onClick={getQuestion} className={`cursor-pointer py-2 px-5 rounded-lg ml-2 ${ isListening ? 'hidden' : 'bg-white border'}`}>
-              { isListening ? '' : 'Next Question'} 
-            </span>
+
+          <span
+            onClick={getQuestion}
+            className={`cursor-pointer py-2 px-5 rounded-lg ml-2 ${
+              isListening ? 'hidden' : 'bg-white border'
+            }`}
+          >
+            {isListening ? '' : 'Next Question'}
+          </span>
+
           <div className="mt-2">{transcript}</div>
         </div>
+
         <div
-          className={`transition-all ${ feedbackLoadingStatus || feedback ? 'w-1/2 border-left h-screen'  : 'w-100'
+          className={`transition-all ${
+            feedbackLoadingStatus || feedback ? 'w-1/2 border-left h-screen' : 'w-100'
           }`}
         >
           {feedback && (
             <div className="mt-24">
-              <p className="w-[100%] text-center">
-                Let’s see how you answered:
-              </p>
+              <p className="w-full text-center">Let’s see how you answered:</p>
               <div className="max-h-48 overflow-auto border p-3 rounded-md">
                 <p className="my-3 whitespace-pre-line">{feedback.feedback}</p>
               </div>
@@ -224,7 +253,8 @@ let tempTranscript = '';
                   {[...Array(5)].map((_, i) => (
                     <div
                       key={i}
-                      className={`h-1 flex-1 ${ i < Number(feedback.correctness) ? 'bg-blue-700' : 'bg-neutral-200'
+                      className={`h-1 flex-1 ${
+                        i < Number(feedback.correctness) ? 'bg-blue-700' : 'bg-neutral-200'
                       }`}
                     ></div>
                   ))}
@@ -237,9 +267,7 @@ let tempTranscript = '';
                     <div
                       key={i}
                       className={`h-1 flex-1 ${
-                        i < Number(feedback.completeness)
-                          ? 'bg-green-600'
-                          : 'bg-neutral-200'
+                        i < Number(feedback.completeness) ? 'bg-green-600' : 'bg-neutral-200'
                       }`}
                     ></div>
                   ))}
